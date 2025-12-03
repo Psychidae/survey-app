@@ -10,7 +10,7 @@ import json
 import glob
 
 # --- ページ設定 ---
-st.set_page_config(page_title="学内蛾類調査マップ Pro", page_icon="🦋", layout="wide")
+st.set_page_config(page_title="調査地点プロットマップ", page_icon="🐛", layout="wide")
 
 # ==========================================
 # 📁 プロジェクト管理機能 (サイドバー)
@@ -72,7 +72,7 @@ OFFLINE_ROADS = 'offline_roads.geojson'
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
 # 採集方法の定義
-METHODS = ["Light trap (灯火採集)", "Net sweeping (ネット)", "Finding (見取り)", "Bait trap (ベイト)"]
+METHODS = ["Light trap (灯火採集)", "Net sweeping (スウィーピング)", "Finding (見つけどり)", "Bait trap (ベイトトラップ)"]
 
 @st.cache_data
 def load_road_geojson():
@@ -148,7 +148,7 @@ def download_roads_for_bounds(south, west, north, east):
         return False, f"エラーが発生しました: {e}"
 
 # --- タイトル ---
-st.title("🦋 学内蛾類調査フィールドノート")
+st.title("🦋 調査フィールドノート")
 st.caption(f"Project: **{st.session_state.current_project}**")
 
 # --- セッション状態の初期化 ---
