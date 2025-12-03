@@ -60,11 +60,10 @@ with st.sidebar.expander("➕ 新規プロジェクト作成"):
 DATA_FILE = f"{FILE_PREFIX}{st.session_state.current_project}.csv"
 st.sidebar.info(f"現在のデータ: `{DATA_FILE}`")
 
-# --- 💾 バックアップと復元機能 (New!) ---
+# --- 💾 バックアップと復元機能 ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("💾 バックアップと復元")
 
-# 1. ダウンロード (バックアップ)
 if os.path.exists(DATA_FILE):
     with open(DATA_FILE, "rb") as f:
         csv_bytes = f.read()
@@ -78,16 +77,11 @@ if os.path.exists(DATA_FILE):
 else:
     st.sidebar.warning("データファイルがまだありません。")
 
-# 2. アップロード (復元)
 uploaded_file = st.sidebar.file_uploader("📤 CSVを読み込んで復元", type=["csv"], help="バックアップしたCSVを読み込み、現在のプロジェクトに上書きします。")
 if uploaded_file is not None:
     try:
-        # 読み込んで形式チェック
         import_df = pd.read_csv(uploaded_file)
-        # 必須カラムのチェック (簡易)
         required_cols = ["日付", "時間", "lat", "lon", "種名"]
-        
-        # カラム名が足りているか確認
         if all(col in import_df.columns for col in required_cols):
             st.sidebar.info(f"読み込み成功: {len(import_df)} 件のデータ")
             if st.sidebar.button("⚠️ 現在のプロジェクトに上書き保存する"):
@@ -221,6 +215,12 @@ if 'last_method_index' not in st.session_state:
 if 'last_notes' not in st.session_state:
     st.session_state.last_notes = ""
 
+# 追加: 手動入力用の日付・時間を保持するための変数
+if 'last_date' not in st.session_state:
+    st.session_state.last_date = datetime.now()
+if 'last_time' not in st.session_state:
+    st.session_state.last_time = datetime.now()
+
 if 'map_bounds' not in st.session_state:
     st.session_state.map_bounds = None
 
@@ -297,7 +297,7 @@ with col_map:
                 except Exception as e:
                     st.error(f"削除に失敗しました: {e}")
 
-    # 地図の生成 (前回タップした位置を中心にする)
+    # 地図の生成
     m = None
     center_lat = st.session_state.selected_lat
     center_lon = st.session_state.selected_lon
@@ -391,15 +391,14 @@ with col_map:
             tooltip=row['種名']
         ).add_to(m)
 
-    # 現在選択されている座標にピンを表示（タップでここに移動する）
+    # 現在選択されている座標にピンを表示
     folium.Marker(
         [st.session_state.selected_lat, st.session_state.selected_lon],
         popup="選択地点",
         icon=folium.Icon(color='red', icon='info-sign')
     ).add_to(m)
 
-    # --- 重要変更点: returned_objects を削減して軽量化 ---
-    # center や zoom を監視しないことで、ドラッグ中のリロードを防ぐ
+    # イベント処理
     ret_objs = ["last_clicked"]
     if enable_bounds_tracking:
         ret_objs.append("bounds")
@@ -411,18 +410,15 @@ with col_map:
         returned_objects=ret_objs
     )
 
-    # --- イベント処理 ---
     if map_data:
         if enable_bounds_tracking and map_data.get("bounds"):
             st.session_state.map_bounds = map_data["bounds"]
         
-        # クリックされたときだけ位置情報を更新してリロード
         if map_data.get("last_clicked"):
             clicked_lat = map_data["last_clicked"]["lat"]
             clicked_lon = map_data["last_clicked"]["lng"]
             
             if clicked_lat != 0 and clicked_lon != 0:
-                # 座標が変わった場合のみ更新
                 if (abs(clicked_lat - st.session_state.selected_lat) > 0.000001 or 
                     abs(clicked_lon - st.session_state.selected_lon) > 0.000001):
                     
@@ -437,7 +433,6 @@ with col_form:
     
     st.subheader("🚀 リアルタイム記録")
     
-    # 座標表示 (手動修正可能)
     c1, c2 = st.columns(2)
     with c1:
         st.number_input("緯度", format="%.6f", key="input_lat", on_change=update_form_coords)
@@ -461,11 +456,9 @@ with col_form:
                     current_method = METHODS[0]
                 current_notes = st.session_state.last_notes
                 
-                # 確定済みの input_lat/lon (＝selected_lat/lon) を使用
                 rec_lat = st.session_state.selected_lat
                 rec_lon = st.session_state.selected_lon
                 
-                # ガード
                 if not rec_lat or rec_lat == 0:
                     rec_lat = 35.6895
                     rec_lon = 139.6917
@@ -483,6 +476,11 @@ with col_form:
                 }
                 
                 append_data(new_quick_record)
+                
+                # クイック記録したときも、詳細記録用の「前回日時」を更新しておく
+                st.session_state.last_date = now_quick.date()
+                st.session_state.last_time = now_quick.time()
+                
                 st.success(f"⚡️ {quick_species} を記録しました！")
                 st.rerun()
             else:
@@ -515,9 +513,9 @@ with col_form:
     # 詳細記録
     with st.expander("📝 日時などの手動調整 (詳細記録)"):
         with st.form("manual_record_form", clear_on_submit=True):
-            now = datetime.now()
-            input_date = st.date_input("日付", value=now)
-            input_time = st.time_input("時間", value=now)
+            # 修正箇所: 現在時刻(now)ではなく、SessionStateに保持されている前回の値を初期値にする
+            input_date = st.date_input("日付", value=st.session_state.last_date)
+            input_time = st.time_input("時間", value=st.session_state.last_time)
             
             species_name = st.text_input("種名 (標準和名)", placeholder="例: オオミズアオ")
             
@@ -547,6 +545,11 @@ with col_form:
                         "備考": current_notes
                     }
                     append_data(new_record)
+                    
+                    # 保存時に、入力された日時を次回の初期値として更新する
+                    st.session_state.last_date = input_date
+                    st.session_state.last_time = input_time
+                    
                     st.success(f"保存完了: {species_name}")
                 else:
                     st.error("種名を入力してください。")
