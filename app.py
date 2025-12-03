@@ -14,17 +14,12 @@ st.set_page_config(page_title="学内蛾類調査マップ Offline", page_icon="
 
 # --- 関数: データの読み込みと保存 ---
 def load_data():
-    # ファイルが存在するか確認
     if os.path.exists(DATA_FILE):
         try:
-            # ファイルを読み込む
             return pd.read_csv(DATA_FILE)
         except pd.errors.EmptyDataError:
-            # ファイルはあるが中身が空（0バイト）の場合のエラーをキャッチ
-            # ヘッダー情報を持つ空のデータフレームを返す
             return pd.DataFrame(columns=["日付", "時間", "lat", "lon", "種名", "方法", "採集者", "備考"])
     else:
-        # ファイル自体がない場合
         return pd.DataFrame(columns=["日付", "時間", "lat", "lon", "種名", "方法", "採集者", "備考"])
 
 def save_data(new_record):
@@ -40,7 +35,6 @@ st.title("🦋 学内蛾類調査フィールドノート (Offline Mode)")
 # --- ローカル保存場所の表示 ---
 current_dir = os.getcwd()
 file_path = os.path.join(current_dir, DATA_FILE)
-# クラウド環境ではパスが見えてもあまり意味がないため、ローカル実行時のみ役立ちます
 st.caption(f"📂 Data Path: `{file_path}`")
 
 # --- セッション状態の初期化 ---
@@ -51,7 +45,6 @@ if 'selected_lat' not in st.session_state:
         st.session_state.selected_lat = last_rec['lat']
         st.session_state.selected_lon = last_rec['lon']
     else:
-        # 初期値（前回値がない場合）
         st.session_state.selected_lat = 35.6895
         st.session_state.selected_lon = 139.6917
 
@@ -67,7 +60,6 @@ col1, col2 = st.columns([1, 2])
 with col2:
     st.subheader("🗺️ 位置決め")
     
-    # オフライン用設定: 地図タイルを選べるようにする
     tile_option = st.radio(
         "地図モード", 
         ["OpenStreetMap (オンライン用)", "None (完全オフライン用・白地図)"], 
@@ -75,28 +67,21 @@ with col2:
         horizontal=True
     )
     
-    # 地図の作成
     if tile_option == "None (完全オフライン用・白地図)":
-        # タイルなし（グレー背景または白背景）
         m = folium.Map(
             location=[st.session_state.selected_lat, st.session_state.selected_lon], 
             zoom_start=18,
             tiles=None
         )
-        # グリッド線を追加して距離感をつかめるようにする
         folium.LatLngPopup().add_to(m)
     else:
-        # 通常のOSM
         m = folium.Map(
             location=[st.session_state.selected_lat, st.session_state.selected_lon], 
             zoom_start=18
         )
 
-    # 現在地ボタン
     LocateControl(auto_start=False).add_to(m)
 
-    # 過去の記録をプロット
-    # ※FontAwesome等の外部アイコンを使わず、CircleMarker（円）を使うことでオフラインでも描画を保証
     df = load_data()
     for index, row in df.iterrows():
         folium.CircleMarker(
@@ -110,35 +95,40 @@ with col2:
             tooltip=row['種名']
         ).add_to(m)
 
-    # 現在の記録地点（赤いピン）
     folium.Marker(
         [st.session_state.selected_lat, st.session_state.selected_lon],
         popup="ここを記録します",
-        icon=folium.Icon(color='red') # デフォルトアイコン
+        icon=folium.Icon(color='red')
     ).add_to(m)
 
-    # 地図を表示
     map_data = st_folium(m, height=500, width="100%", returned_objects=["last_clicked"])
 
-    # クリック時の処理
+    # --- 修正箇所: クリック時の処理 ---
     if map_data and map_data.get("last_clicked"):
         clicked_lat = map_data["last_clicked"]["lat"]
         clicked_lon = map_data["last_clicked"]["lng"]
         
         if (clicked_lat != st.session_state.selected_lat or 
             clicked_lon != st.session_state.selected_lon):
+            
+            # 1. 内部管理用の変数を更新
             st.session_state.selected_lat = clicked_lat
             st.session_state.selected_lon = clicked_lon
+            
+            # 2. 入力フォームのウィジェットの値も強制更新 (これがないとフォームの値が優先されて戻ってしまう)
+            st.session_state.input_lat = clicked_lat
+            st.session_state.input_lon = clicked_lon
+            
             st.rerun()
 
 # --- 左カラム：入力フォーム ---
 with col1:
     st.subheader("📝 記録データ")
     
-    # --- 位置情報入力 ---
     st.markdown("**📍 位置情報**")
     st.info("ネットがない環境では、地図がグレーになる場合があります。その場合は「白地図」モードを選び、相対位置やグリッドを参考にしてください。")
     
+    # フォームの値を value 引数で指定しつつ、keyを設定してセッションと紐付け
     lat = st.number_input(
         "緯度", 
         value=st.session_state.selected_lat, 
@@ -156,7 +146,6 @@ with col1:
     
     st.markdown("---")
     
-    # --- 入力フォーム ---
     with st.form("survey_form", clear_on_submit=True):
         now = datetime.now()
         input_date = st.date_input("日付", now)
@@ -191,7 +180,6 @@ with col1:
             else:
                 st.error("種名を入力してください。")
 
-    # データ管理
     with st.expander("保存データ管理"):
         st.dataframe(df)
         csv_data = df.to_csv(index=False).encode('utf-8_sig')
