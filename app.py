@@ -7,9 +7,80 @@ from streamlit_folium import st_folium
 from folium.plugins import LocateControl
 import requests
 import json
+import glob # ファイル検索用に追加
 
-# --- 設定 ---
-DATA_FILE = 'moth_data.csv'
+# --- ページ設定 ---
+st.set_page_config(page_title="学内蛾類調査マップ Pro", page_icon="🦋", layout="wide")
+
+# ==========================================
+# 📁 プロジェクト管理機能 (サイドバー)
+# ==========================================
+st.sidebar.title("📁 プロジェクト管理")
+
+# データファイルの接頭辞（これの後にプロジェクト名がつく）
+FILE_PREFIX = "moth_data_"
+
+# 既存のプロジェクトファイルを探す関数
+def get_existing_projects():
+    # moth_data_*.csv に一致するファイルを探す
+    files = glob.glob(f"{FILE_PREFIX}*.csv")
+    # ファイル名から「moth_data_」と「.csv」を取り除いてプロジェクト名にする
+    projects = [os.path.basename(f).replace(FILE_PREFIX, "").replace(".csv", "") for f in files]
+    
+    # ファイルが一つもない場合はデフォルトを用意
+    if not projects:
+        return ["default"]
+    
+    return sorted(projects)
+
+# 1. プロジェクト選択
+existing_projects = get_existing_projects()
+# セッションステートで選択状態を管理（リロード時の保持用）
+if 'current_project' not in st.session_state:
+    st.session_state.current_project = existing_projects[0]
+
+# セレクトボックス（選択肢にない新規作成直後の値も扱えるようにindex調整）
+try:
+    current_index = existing_projects.index(st.session_state.current_project)
+except ValueError:
+    current_index = 0
+
+selected_project = st.sidebar.selectbox(
+    "プロジェクトを選択", 
+    existing_projects, 
+    index=current_index
+)
+st.session_state.current_project = selected_project
+
+# 2. 新規プロジェクト作成
+with st.sidebar.expander("➕ 新規プロジェクト作成"):
+    new_proj_name = st.text_input("プロジェクト名 (例: 2025_Summer)", placeholder="半角英数推奨")
+    if st.button("作成"):
+        if new_proj_name and new_proj_name not in existing_projects:
+            # 新しいプロジェクト名をセットしてリロード
+            st.session_state.current_project = new_proj_name
+            # 空のファイルを作成しておく（load_dataでエラーにならないように）
+            new_filename = f"{FILE_PREFIX}{new_proj_name}.csv"
+            empty_df = pd.DataFrame(columns=["日付", "時間", "lat", "lon", "種名", "方法", "採集者", "備考"])
+            empty_df.to_csv(new_filename, index=False)
+            
+            st.success(f"プロジェクト「{new_proj_name}」を作成しました！")
+            st.rerun()
+        elif new_proj_name in existing_projects:
+            st.error("その名前は既に存在します。")
+        else:
+            st.error("名前を入力してください。")
+
+# 現在使用するデータファイルを決定
+DATA_FILE = f"{FILE_PREFIX}{st.session_state.current_project}.csv"
+
+st.sidebar.info(f"現在のデータ: `{DATA_FILE}`")
+st.sidebar.markdown("---")
+
+
+# ==========================================
+# 🗺️ 以下、メインアプリケーション
+# ==========================================
 
 # オフライン用地図・データ設定
 OFFLINE_MAP_IMAGE = 'offline_map.png' 
@@ -18,9 +89,6 @@ OFFLINE_ROADS = 'offline_roads.geojson'       # アプリでダウンロード�
 
 # Overpass APIのエンドポイント
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
-
-# --- ページ設定 ---
-st.set_page_config(page_title="学内蛾類調査マップ Pro", page_icon="🦋", layout="wide")
 
 # --- 関数: データのキャッシュ読み込み ---
 @st.cache_data
@@ -101,11 +169,12 @@ def download_roads_for_bounds(south, west, north, east):
         return False, f"エラーが発生しました: {e}"
 
 # --- タイトル ---
-st.title("🦋 学内蛾類調査フィールドノート (Fixed)")
+st.title("🦋 学内蛾類調査フィールドノート (Projects)")
+st.caption(f"Project: **{st.session_state.current_project}**")
 
 # --- ローカル保存場所の表示 ---
 current_dir = os.getcwd()
-st.caption(f"📂 Data Path: `{os.path.join(current_dir, DATA_FILE)}`")
+# st.caption(f"📂 Data Path: `{os.path.join(current_dir, DATA_FILE)}`")
 
 # --- セッション状態の初期化 ---
 if 'selected_lat' not in st.session_state:
@@ -118,7 +187,6 @@ if 'selected_lat' not in st.session_state:
         st.session_state.selected_lat = 35.6895
         st.session_state.selected_lon = 139.6917
 
-# ウィジェット用の初期値も確実にセットする
 if 'input_lat' not in st.session_state:
     st.session_state.input_lat = st.session_state.selected_lat
 if 'input_lon' not in st.session_state:
@@ -138,11 +206,12 @@ def update_map_from_input():
     st.session_state.selected_lat = st.session_state.input_lat
     st.session_state.selected_lon = st.session_state.input_lon
 
-# --- レイアウト ---
-col1, col2 = st.columns([1, 2])
+# --- レイアウト変更 ---
+# 地図を左(スマホでは上)、フォームを右(スマホでは下)に配置
+col_map, col_form = st.columns([2, 1])
 
-# --- 右カラム：地図 ---
-with col2:
+# --- カラム1（左・上）：地図 ---
+with col_map:
     st.subheader("🗺️ 位置決め")
     
     # 地図タイルの選択肢
@@ -162,14 +231,13 @@ with col2:
     show_roads = False
     road_data = load_road_geojson() # キャッシュからロード
     
-    # データが存在する場合のみチェックボックスを表示
     if road_data:
         show_roads = st.checkbox("🛣️ 道路データを表示", value=True)
     else:
         st.caption("※道路データは未ダウンロードです")
 
     # --- データ取得・削除ツール ---
-    with st.expander("📥 道路データの管理 (ダウンロード・削除)", expanded=True):
+    with st.expander("📥 道路データの管理 (ダウンロード・削除)", expanded=False):
         # 1. ダウンロード機能
         if enable_bounds_tracking:
             st.info("地図を拡大してボタンを押してください。")
@@ -197,14 +265,14 @@ with col2:
         else:
             st.caption("ダウンロードするには「地図範囲を追跡する」をONにしてください。")
 
-        # 2. 削除機能 (軽量化)
+        # 2. 削除機能
         if road_data: 
             st.markdown("---")
             if st.button("🗑️ ダウンロードした道路データを削除 (軽量化)"):
                 try:
                     if os.path.exists(OFFLINE_ROADS):
                         os.remove(OFFLINE_ROADS)
-                        load_road_geojson.clear() # キャッシュをクリア
+                        load_road_geojson.clear()
                         st.success("削除しました。動作が軽くなります。")
                         st.rerun()
                 except Exception as e:
@@ -332,13 +400,12 @@ with col2:
                 st.session_state.input_lon = clicked_lon
                 st.rerun()
 
-# --- 左カラム：入力フォーム ---
-with col1:
+# --- カラム2（右・下）：入力フォーム ---
+with col_form:
     st.subheader("📝 記録データ")
     
     st.markdown("**📍 位置情報**")
     
-    # 修正箇所: value引数を削除し、keyだけで管理するように変更
     lat = st.number_input(
         "緯度", 
         format="%.6f", 
@@ -406,4 +473,4 @@ with col1:
             st.rerun()
 
         csv_data = current_df.to_csv(index=False).encode('utf-8_sig')
-        st.download_button("CSVコピーを作成 (Download)", csv_data, "moth_data_export.csv", "text/csv")
+        st.download_button("CSVコピーを作成 (Download)", csv_data, f"{st.session_state.current_project}_export.csv", "text/csv")
