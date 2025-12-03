@@ -14,9 +14,17 @@ st.set_page_config(page_title="学内蛾類調査マップ Offline", page_icon="
 
 # --- 関数: データの読み込みと保存 ---
 def load_data():
+    # ファイルが存在するか確認
     if os.path.exists(DATA_FILE):
-        return pd.read_csv(DATA_FILE)
+        try:
+            # ファイルを読み込む
+            return pd.read_csv(DATA_FILE)
+        except pd.errors.EmptyDataError:
+            # ファイルはあるが中身が空（0バイト）の場合のエラーをキャッチ
+            # ヘッダー情報を持つ空のデータフレームを返す
+            return pd.DataFrame(columns=["日付", "時間", "lat", "lon", "種名", "方法", "採集者", "備考"])
     else:
+        # ファイル自体がない場合
         return pd.DataFrame(columns=["日付", "時間", "lat", "lon", "種名", "方法", "採集者", "備考"])
 
 def save_data(new_record):
@@ -32,7 +40,8 @@ st.title("🦋 学内蛾類調査フィールドノート (Offline Mode)")
 # --- ローカル保存場所の表示 ---
 current_dir = os.getcwd()
 file_path = os.path.join(current_dir, DATA_FILE)
-st.caption(f"📂 データ保存先 (Local Path): `{file_path}`")
+# クラウド環境ではパスが見えてもあまり意味がないため、ローカル実行時のみ役立ちます
+st.caption(f"📂 Data Path: `{file_path}`")
 
 # --- セッション状態の初期化 ---
 if 'selected_lat' not in st.session_state:
@@ -83,7 +92,7 @@ with col2:
             zoom_start=18
         )
 
-    # 現在地ボタン（ブラウザのGPS機能を利用するため、オフラインでもPCにGPSがあれば動作可能）
+    # 現在地ボタン
     LocateControl(auto_start=False).add_to(m)
 
     # 過去の記録をプロット
@@ -102,11 +111,10 @@ with col2:
         ).add_to(m)
 
     # 現在の記録地点（赤いピン）
-    # ※標準マーカーは画像を使わないためオフラインでも表示されやすいが、念のためIconオブジェクトをシンプルに
     folium.Marker(
         [st.session_state.selected_lat, st.session_state.selected_lon],
         popup="ここを記録します",
-        icon=folium.Icon(color='red') # デフォルトアイコンを使用
+        icon=folium.Icon(color='red') # デフォルトアイコン
     ).add_to(m)
 
     # 地図を表示
@@ -186,6 +194,5 @@ with col1:
     # データ管理
     with st.expander("保存データ管理"):
         st.dataframe(df)
-        # ローカルファイルパスがわかっていればダウンロード不要ですが、手軽さのために残します
         csv_data = df.to_csv(index=False).encode('utf-8_sig')
         st.download_button("CSVコピーを作成 (Download)", csv_data, "moth_data_export.csv", "text/csv")
