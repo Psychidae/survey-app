@@ -4,13 +4,13 @@ from datetime import datetime
 import os
 import folium
 from streamlit_folium import st_folium
-from folium.plugins import LocateControl
+from folium.plugins import LocateControl, Geocoder
 import requests
 import json
 import glob
 
 # --- ページ設定 ---
-st.set_page_config(page_title="調査地点プロットマップ", page_icon="🐛", layout="wide")
+st.set_page_config(page_title="学内蛾類調査マップ Pro", page_icon="🦋", layout="wide")
 
 # ==========================================
 # 📁 プロジェクト管理機能 (サイドバー)
@@ -72,7 +72,7 @@ OFFLINE_ROADS = 'offline_roads.geojson'
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
 # 採集方法の定義
-METHODS = ["Light trap (灯火採集)", "Net sweeping (スウィーピング)", "Finding (見つけどり)", "Bait trap (ベイトトラップ)"]
+METHODS = ["Light trap (灯火採集)", "Net sweeping (ネット)", "Finding (見取り)", "Bait trap (ベイト)"]
 
 @st.cache_data
 def load_road_geojson():
@@ -148,30 +148,34 @@ def download_roads_for_bounds(south, west, north, east):
         return False, f"エラーが発生しました: {e}"
 
 # --- タイトル ---
-st.title("🦋 調査フィールドノート")
+st.title("🦋 学内蛾類調査フィールドノート (Search & Manual)")
 st.caption(f"Project: **{st.session_state.current_project}**")
 
 # --- セッション状態の初期化 ---
-if 'selected_lat' not in st.session_state:
+# 1. 記録用座標 (Input Form)
+if 'input_lat' not in st.session_state:
+    st.session_state.input_lat = 35.6895
+if 'input_lon' not in st.session_state:
+    st.session_state.input_lon = 139.6917
+
+# 2. 地図の表示状態 (Map View) - 独立して管理
+if 'view_lat' not in st.session_state:
+    st.session_state.view_lat = 35.6895
+if 'view_lon' not in st.session_state:
+    st.session_state.view_lon = 139.6917
+if 'view_zoom' not in st.session_state:
+    st.session_state.view_zoom = 16
+
+# 初期ロード時のデータ反映
+if 'data_loaded' not in st.session_state:
     df_init = load_data()
     if not df_init.empty:
         last_rec = df_init.iloc[-1]
-        st.session_state.selected_lat = last_rec['lat']
-        st.session_state.selected_lon = last_rec['lon']
-    else:
-        st.session_state.selected_lat = 35.6895
-        st.session_state.selected_lon = 139.6917
-
-# ガード処理
-if not st.session_state.selected_lat or st.session_state.selected_lat == 0:
-    st.session_state.selected_lat = 35.6895
-if not st.session_state.selected_lon or st.session_state.selected_lon == 0:
-    st.session_state.selected_lon = 139.6917
-
-if 'input_lat' not in st.session_state:
-    st.session_state.input_lat = st.session_state.selected_lat
-if 'input_lon' not in st.session_state:
-    st.session_state.input_lon = st.session_state.selected_lon
+        st.session_state.input_lat = last_rec['lat']
+        st.session_state.input_lon = last_rec['lon']
+        st.session_state.view_lat = last_rec['lat']
+        st.session_state.view_lon = last_rec['lon']
+    st.session_state.data_loaded = True
 
 # --- 共通入力情報の保持 ---
 if 'last_collector' not in st.session_state:
@@ -187,9 +191,11 @@ if 'map_bounds' not in st.session_state:
 if 'img_bounds' not in st.session_state:
     st.session_state.img_bounds = [35.6890, 139.6910, 35.6900, 139.6925]
 
-def update_map_from_input():
-    st.session_state.selected_lat = st.session_state.input_lat
-    st.session_state.selected_lon = st.session_state.input_lon
+def update_form_coords():
+    """地図のフォーム入力値を更新するコールバック"""
+    # フォームで入力されたら、地図の表示位置もそこに移動させる
+    st.session_state.view_lat = st.session_state.input_lat
+    st.session_state.view_lon = st.session_state.input_lon
 
 # --- レイアウト ---
 col_map, col_form = st.columns([2, 1])
@@ -255,15 +261,16 @@ with col_map:
                 except Exception as e:
                     st.error(f"削除に失敗しました: {e}")
 
-    # 現在選択されている座標を中心にする
-    center_lat = st.session_state.selected_lat
-    center_lon = st.session_state.selected_lon
-
+    # 地図の生成 (前回表示位置とズームを維持)
     m = None
+    center_lat = st.session_state.view_lat
+    center_lon = st.session_state.view_lon
+    zoom_start = st.session_state.view_zoom
+
     if tile_option == "地理院地図 標準 (Online)":
         m = folium.Map(
             location=[center_lat, center_lon], 
-            zoom_start=18,
+            zoom_start=zoom_start,
             tiles='https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',
             attr='国土地理院',
             prefer_canvas=True
@@ -271,7 +278,7 @@ with col_map:
     elif tile_option == "地理院地図 写真 (Online)":
         m = folium.Map(
             location=[center_lat, center_lon], 
-            zoom_start=18,
+            zoom_start=zoom_start,
             tiles='https://cyberjapandata.gsi.go.jp/xyz/ort/{z}/{x}/{y}.jpg',
             attr='国土地理院',
             prefer_canvas=True
@@ -279,7 +286,7 @@ with col_map:
     elif tile_option == "Offline Image (PNG/SVG)":
         m = folium.Map(
             location=[center_lat, center_lon], 
-            zoom_start=18,
+            zoom_start=zoom_start,
             tiles=None,
             prefer_canvas=True
         )
@@ -302,7 +309,7 @@ with col_map:
     elif tile_option == "White Map (Simple)":
         m = folium.Map(
             location=[center_lat, center_lon], 
-            zoom_start=15,
+            zoom_start=zoom_start,
             tiles=None,
             prefer_canvas=True
         )
@@ -310,11 +317,18 @@ with col_map:
     else:
         m = folium.Map(
             location=[center_lat, center_lon], 
-            zoom_start=18,
+            zoom_start=zoom_start,
             prefer_canvas=True
         )
 
-    # ターゲット（照準）
+    # ----------------------------------------------------
+    # 🔍 検索機能 (Geocoder) の追加
+    # ----------------------------------------------------
+    Geocoder(add_marker=False).add_to(m)
+
+    # ----------------------------------------------------
+    # 🎯 地図中央に固定のターゲット（照準）を表示
+    # ----------------------------------------------------
     target_html = """
     <div style="
         position: absolute;
@@ -346,11 +360,13 @@ with col_map:
             interactive=False 
         ).add_to(m)
 
+    # 現在地ボタン
     LocateControl(
         auto_start=False,
-        strings={"title": "現在地に移動する (Trace)"}
+        strings={"title": "現在地に移動する"}
     ).add_to(m)
 
+    # 過去の記録
     df = load_data()
     for index, row in df.iterrows():
         folium.CircleMarker(
@@ -364,14 +380,16 @@ with col_map:
             tooltip=row['種名']
         ).add_to(m)
 
-    # 記録予定地ピン
+    # 現在選択されているピン（Inputに入っている座標）を地図上に表示
+    # ターゲットと区別するために青色などで表示
     folium.Marker(
-        [st.session_state.selected_lat, st.session_state.selected_lon],
-        popup="記録予定地",
-        icon=folium.Icon(color='red')
+        [st.session_state.input_lat, st.session_state.input_lon],
+        popup="現在設定されている座標",
+        icon=folium.Icon(color='blue', icon='info-sign')
     ).add_to(m)
 
-    ret_objs = ["center"]
+    # イベント取得: center と zoom を取得
+    ret_objs = ["center", "zoom"]
     if enable_bounds_tracking:
         ret_objs.append("bounds")
 
@@ -382,41 +400,43 @@ with col_map:
         returned_objects=ret_objs
     )
 
+    # 地図が動かされたら、次回表示のために中心位置とズームを記憶する
+    # ただし、input_lat/lon (記録用座標) は更新しない！
     if map_data:
         if enable_bounds_tracking and map_data.get("bounds"):
             st.session_state.map_bounds = map_data["bounds"]
+        
+        if map_data.get("zoom"):
+            st.session_state.view_zoom = map_data["zoom"]
 
         if map_data.get("center"):
-            center_res = map_data["center"]
-            new_lat = center_res["lat"]
-            new_lon = center_res["lng"]
-            
-            if new_lat != 0 and new_lon != 0:
-                if (abs(new_lat - st.session_state.selected_lat) > 0.000001 or 
-                    abs(new_lon - st.session_state.selected_lon) > 0.000001):
-                    
-                    st.session_state.selected_lat = new_lat
-                    st.session_state.selected_lon = new_lon
-                    st.session_state.input_lat = new_lat
-                    st.session_state.input_lon = new_lon
-                    st.rerun()
+            c = map_data["center"]
+            st.session_state.view_lat = c["lat"]
+            st.session_state.view_lon = c["lng"]
 
 # --- カラム2（右・下）：入力フォーム ---
 with col_form:
     
-    # ==========================================
-    # 🚀 リアルタイム記録 (Quick Mode)
-    # ==========================================
     st.subheader("🚀 リアルタイム記録")
-    st.caption("地図中央の **「赤い十字」** の場所に記録します。")
-    st.info("👈 地図左上の **「📍」ボタン** で現在地に移動。")
     
+    # ----------------------------------------------------
+    # 📍 座標取得ボタン (手動設定)
+    # ----------------------------------------------------
+    st.info("1. 地図を動かして赤い十字を目標に合わせます。\n2. 下のボタンを押して座標を取り込みます。")
+    if st.button("📍 画面中央の座標を取得 (Set Position)", type="primary"):
+        st.session_state.input_lat = st.session_state.view_lat
+        st.session_state.input_lon = st.session_state.view_lon
+        st.success("座標を更新しました！")
+        st.rerun()
+
+    # 座標表示
     c1, c2 = st.columns(2)
     with c1:
-        st.number_input("緯度", format="%.6f", key="input_lat", on_change=update_map_from_input)
+        st.number_input("緯度", format="%.6f", key="input_lat", on_change=update_form_coords)
     with c2:
-        st.number_input("経度", format="%.6f", key="input_lon", on_change=update_map_from_input)
+        st.number_input("経度", format="%.6f", key="input_lon", on_change=update_form_coords)
 
+    # クイック記録フォーム
     with st.form("quick_record_form", clear_on_submit=True):
         quick_species = st.text_input("種名 (入力してEnter)", placeholder="例: オオミズアオ")
         quick_submit = st.form_submit_button("今すぐ記録する")
@@ -425,8 +445,7 @@ with col_form:
             if quick_species:
                 now_quick = datetime.now()
                 
-                # 共通設定フォームからの値（セッションステート）を使用
-                # フォームで確定された値(last_*)を使用するのが最も安全
+                # 共通設定の値
                 current_collector = st.session_state.last_collector
                 try:
                     current_method = METHODS[st.session_state.last_method_index]
@@ -434,13 +453,15 @@ with col_form:
                     current_method = METHODS[0]
                 current_notes = st.session_state.last_notes
                 
-                rec_lat = st.session_state.selected_lat
-                rec_lon = st.session_state.selected_lon
+                # 確定済みの input_lat/lon を使用
+                rec_lat = st.session_state.input_lat
+                rec_lon = st.session_state.input_lon
                 
+                # ガード
                 if not rec_lat or rec_lat == 0:
                     rec_lat = 35.6895
                     rec_lon = 139.6917
-                    st.warning("⚠️ 位置情報取得エラー。デフォルト値を使用しました。")
+                    st.warning("⚠️ 座標未設定です。デフォルト値を使用します。")
 
                 new_quick_record = {
                     "日付": now_quick.date(), 
@@ -454,7 +475,6 @@ with col_form:
                 }
                 
                 append_data(new_quick_record)
-                
                 st.success(f"⚡️ {quick_species} を記録しました！")
                 st.rerun()
             else:
@@ -462,15 +482,11 @@ with col_form:
 
     st.markdown("---")
     
-    # ==========================================
-    # ⚙️ 共通設定 (Common Settings) - フォーム化
-    # ==========================================
+    # 共通設定フォーム
     with st.form("common_settings_form"):
         st.subheader("⚙️ 共通設定 (採集者・方法)")
-        st.caption("ここで入力した内容は、**「設定を適用」ボタンを押した後**、上のリアルタイム記録に反映されます。")
+        st.caption("入力後、「設定を適用」を押してください。")
         
-        # フォーム内では key を使っても即時リロードは発生しない
-        # 初期値は前回の確定値 (last_*) を使用
         c_collector = st.text_input("採集者", value=st.session_state.last_collector)
         c_method = st.selectbox("採集・確認方法", METHODS, index=st.session_state.last_method_index)
         c_notes = st.text_area("備考 (共通)", value=st.session_state.last_notes, placeholder="環境など")
@@ -478,21 +494,17 @@ with col_form:
         settings_submitted = st.form_submit_button("✅ 設定を適用 (Apply)")
         
         if settings_submitted:
-            # ボタンが押されたときだけセッションステートを更新
             st.session_state.last_collector = c_collector
             try:
                 st.session_state.last_method_index = METHODS.index(c_method)
             except:
                 st.session_state.last_method_index = 0
             st.session_state.last_notes = c_notes
-            
             st.success("設定を更新しました！")
 
     st.markdown("---")
     
-    # ==========================================
-    # 📝 詳細・手動記録 (Manual Record)
-    # ==========================================
+    # 詳細記録
     with st.expander("📝 日時などの手動調整 (詳細記録)"):
         with st.form("manual_record_form", clear_on_submit=True):
             now = datetime.now()
@@ -501,13 +513,11 @@ with col_form:
             
             species_name = st.text_input("種名 (標準和名)", placeholder="例: オオミズアオ")
             
-            st.caption("※採集者・方法・位置は上の設定が使われます。")
-            
+            st.caption("※採集者・方法は上の設定が使われます。")
             submitted = st.form_submit_button("💾 詳細記録を保存")
 
             if submitted:
                 if species_name:
-                    # 詳細記録でも、確定済みの共通設定を使用
                     current_collector = st.session_state.last_collector
                     try:
                         current_method = METHODS[st.session_state.last_method_index]
@@ -515,8 +525,8 @@ with col_form:
                         current_method = METHODS[0]
                     current_notes = st.session_state.last_notes
                     
-                    rec_lat = st.session_state.selected_lat
-                    rec_lon = st.session_state.selected_lon
+                    rec_lat = st.session_state.input_lat
+                    rec_lon = st.session_state.input_lon
                     
                     new_record = {
                         "日付": input_date,
