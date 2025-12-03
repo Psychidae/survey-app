@@ -10,7 +10,7 @@ import json
 import glob
 
 # --- ページ設定 ---
-st.set_page_config(page_title="調査地プロットマップ Pro", page_icon="🐛", layout="wide")
+st.set_page_config(page_title="学内蛾類調査マップ Pro", page_icon="🦋", layout="wide")
 
 # ==========================================
 # 📁 プロジェクト管理機能 (サイドバー)
@@ -72,7 +72,7 @@ OFFLINE_ROADS = 'offline_roads.geojson'
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
 # 採集方法の定義
-METHODS = ["Light trap (灯火採集)", "Net sweeping (スウィーピング)", "Finding (見つけどり)", "Bait trap (ベイトトラップ)"]
+METHODS = ["Light trap (灯火採集)", "Net sweeping (ネット)", "Finding (見取り)", "Bait trap (ベイト)"]
 
 @st.cache_data
 def load_road_geojson():
@@ -148,34 +148,30 @@ def download_roads_for_bounds(south, west, north, east):
         return False, f"エラーが発生しました: {e}"
 
 # --- タイトル ---
-st.title("🦋 学内蛾類調査フィールドノート (Search & Manual)")
+st.title("🦋 学内蛾類調査フィールドノート (Lightweight)")
 st.caption(f"Project: **{st.session_state.current_project}**")
 
 # --- セッション状態の初期化 ---
-# 1. 記録用座標 (Input Form)
-if 'input_lat' not in st.session_state:
-    st.session_state.input_lat = 35.6895
-if 'input_lon' not in st.session_state:
-    st.session_state.input_lon = 139.6917
-
-# 2. 地図の表示状態 (Map View) - 独立して管理
-if 'view_lat' not in st.session_state:
-    st.session_state.view_lat = 35.6895
-if 'view_lon' not in st.session_state:
-    st.session_state.view_lon = 139.6917
-if 'view_zoom' not in st.session_state:
-    st.session_state.view_zoom = 16
-
-# 初期ロード時のデータ反映
-if 'data_loaded' not in st.session_state:
+if 'selected_lat' not in st.session_state:
     df_init = load_data()
     if not df_init.empty:
         last_rec = df_init.iloc[-1]
-        st.session_state.input_lat = last_rec['lat']
-        st.session_state.input_lon = last_rec['lon']
-        st.session_state.view_lat = last_rec['lat']
-        st.session_state.view_lon = last_rec['lon']
-    st.session_state.data_loaded = True
+        st.session_state.selected_lat = last_rec['lat']
+        st.session_state.selected_lon = last_rec['lon']
+    else:
+        st.session_state.selected_lat = 35.6895
+        st.session_state.selected_lon = 139.6917
+
+# ガード
+if not st.session_state.selected_lat or st.session_state.selected_lat == 0:
+    st.session_state.selected_lat = 35.6895
+if not st.session_state.selected_lon or st.session_state.selected_lon == 0:
+    st.session_state.selected_lon = 139.6917
+
+if 'input_lat' not in st.session_state:
+    st.session_state.input_lat = st.session_state.selected_lat
+if 'input_lon' not in st.session_state:
+    st.session_state.input_lon = st.session_state.selected_lon
 
 # --- 共通入力情報の保持 ---
 if 'last_collector' not in st.session_state:
@@ -192,10 +188,9 @@ if 'img_bounds' not in st.session_state:
     st.session_state.img_bounds = [35.6890, 139.6910, 35.6900, 139.6925]
 
 def update_form_coords():
-    """地図のフォーム入力値を更新するコールバック"""
-    # フォームで入力されたら、地図の表示位置もそこに移動させる
-    st.session_state.view_lat = st.session_state.input_lat
-    st.session_state.view_lon = st.session_state.input_lon
+    # フォーム入力値で地図のピン位置を更新
+    st.session_state.selected_lat = st.session_state.input_lat
+    st.session_state.selected_lon = st.session_state.input_lon
 
 # --- レイアウト ---
 col_map, col_form = st.columns([2, 1])
@@ -203,6 +198,7 @@ col_map, col_form = st.columns([2, 1])
 # --- カラム1（左・上）：地図 ---
 with col_map:
     st.subheader("🗺️ 位置決め")
+    st.info("👆 **地図上をタップ（クリック）** すると、その場所にピンが移動し座標が確定します。移動中はリロードされません。")
     
     map_options = [
         "OpenStreetMap (Online)", 
@@ -261,16 +257,15 @@ with col_map:
                 except Exception as e:
                     st.error(f"削除に失敗しました: {e}")
 
-    # 地図の生成 (前回表示位置とズームを維持)
+    # 地図の生成 (前回タップした位置を中心にする)
     m = None
-    center_lat = st.session_state.view_lat
-    center_lon = st.session_state.view_lon
-    zoom_start = st.session_state.view_zoom
-
+    center_lat = st.session_state.selected_lat
+    center_lon = st.session_state.selected_lon
+    
     if tile_option == "地理院地図 標準 (Online)":
         m = folium.Map(
             location=[center_lat, center_lon], 
-            zoom_start=zoom_start,
+            zoom_start=18,
             tiles='https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',
             attr='国土地理院',
             prefer_canvas=True
@@ -278,7 +273,7 @@ with col_map:
     elif tile_option == "地理院地図 写真 (Online)":
         m = folium.Map(
             location=[center_lat, center_lon], 
-            zoom_start=zoom_start,
+            zoom_start=18,
             tiles='https://cyberjapandata.gsi.go.jp/xyz/ort/{z}/{x}/{y}.jpg',
             attr='国土地理院',
             prefer_canvas=True
@@ -286,7 +281,7 @@ with col_map:
     elif tile_option == "Offline Image (PNG/SVG)":
         m = folium.Map(
             location=[center_lat, center_lon], 
-            zoom_start=zoom_start,
+            zoom_start=18,
             tiles=None,
             prefer_canvas=True
         )
@@ -309,7 +304,7 @@ with col_map:
     elif tile_option == "White Map (Simple)":
         m = folium.Map(
             location=[center_lat, center_lon], 
-            zoom_start=zoom_start,
+            zoom_start=15,
             tiles=None,
             prefer_canvas=True
         )
@@ -317,35 +312,11 @@ with col_map:
     else:
         m = folium.Map(
             location=[center_lat, center_lon], 
-            zoom_start=zoom_start,
+            zoom_start=18,
             prefer_canvas=True
         )
 
-    # ----------------------------------------------------
-    # 🔍 検索機能 (Geocoder) の追加
-    # ----------------------------------------------------
     Geocoder(add_marker=False).add_to(m)
-
-    # ----------------------------------------------------
-    # 🎯 地図中央に固定のターゲット（照準）を表示
-    # ----------------------------------------------------
-    target_html = """
-    <div style="
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        z-index: 9999;
-        pointer-events: none;
-    ">
-        <svg width="60" height="60" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="30" cy="30" r="10" stroke="red" stroke-width="2" fill="none"/>
-            <line x1="30" y1="0" x2="30" y2="60" stroke="red" stroke-width="2"/>
-            <line x1="0" y1="30" x2="60" y2="30" stroke="red" stroke-width="2"/>
-        </svg>
-    </div>
-    """
-    m.get_root().html.add_child(folium.Element(target_html))
 
     if show_roads and road_data:
         folium.GeoJson(
@@ -363,7 +334,7 @@ with col_map:
     # 現在地ボタン
     LocateControl(
         auto_start=False,
-        strings={"title": "現在地に移動する"}
+        strings={"title": "現在地へ移動"}
     ).add_to(m)
 
     # 過去の記録
@@ -380,16 +351,16 @@ with col_map:
             tooltip=row['種名']
         ).add_to(m)
 
-    # 現在選択されているピン（Inputに入っている座標）を地図上に表示
-    # ターゲットと区別するために青色などで表示
+    # 現在選択されている座標にピンを表示（タップでここに移動する）
     folium.Marker(
-        [st.session_state.input_lat, st.session_state.input_lon],
-        popup="現在設定されている座標",
-        icon=folium.Icon(color='blue', icon='info-sign')
+        [st.session_state.selected_lat, st.session_state.selected_lon],
+        popup="選択地点",
+        icon=folium.Icon(color='red', icon='info-sign')
     ).add_to(m)
 
-    # イベント取得: center と zoom を取得
-    ret_objs = ["center", "zoom"]
+    # --- 重要変更点: returned_objects を削減して軽量化 ---
+    # center や zoom を監視しないことで、ドラッグ中のリロードを防ぐ
+    ret_objs = ["last_clicked"]
     if enable_bounds_tracking:
         ret_objs.append("bounds")
 
@@ -400,36 +371,33 @@ with col_map:
         returned_objects=ret_objs
     )
 
-    # 地図が動かされたら、次回表示のために中心位置とズームを記憶する
-    # ただし、input_lat/lon (記録用座標) は更新しない！
+    # --- イベント処理 ---
     if map_data:
         if enable_bounds_tracking and map_data.get("bounds"):
             st.session_state.map_bounds = map_data["bounds"]
         
-        if map_data.get("zoom"):
-            st.session_state.view_zoom = map_data["zoom"]
-
-        if map_data.get("center"):
-            c = map_data["center"]
-            st.session_state.view_lat = c["lat"]
-            st.session_state.view_lon = c["lng"]
+        # クリックされたときだけ位置情報を更新してリロード
+        if map_data.get("last_clicked"):
+            clicked_lat = map_data["last_clicked"]["lat"]
+            clicked_lon = map_data["last_clicked"]["lng"]
+            
+            if clicked_lat != 0 and clicked_lon != 0:
+                # 座標が変わった場合のみ更新
+                if (abs(clicked_lat - st.session_state.selected_lat) > 0.000001 or 
+                    abs(clicked_lon - st.session_state.selected_lon) > 0.000001):
+                    
+                    st.session_state.selected_lat = clicked_lat
+                    st.session_state.selected_lon = clicked_lon
+                    st.session_state.input_lat = clicked_lat
+                    st.session_state.input_lon = clicked_lon
+                    st.rerun()
 
 # --- カラム2（右・下）：入力フォーム ---
 with col_form:
     
     st.subheader("🚀 リアルタイム記録")
     
-    # ----------------------------------------------------
-    # 📍 座標取得ボタン (手動設定)
-    # ----------------------------------------------------
-    st.info("1. 地図を動かして赤い十字を目標に合わせます。\n2. 下のボタンを押して座標を取り込みます。")
-    if st.button("📍 画面中央の座標を取得 (Set Position)", type="primary"):
-        st.session_state.input_lat = st.session_state.view_lat
-        st.session_state.input_lon = st.session_state.view_lon
-        st.success("座標を更新しました！")
-        st.rerun()
-
-    # 座標表示
+    # 座標表示 (手動修正可能)
     c1, c2 = st.columns(2)
     with c1:
         st.number_input("緯度", format="%.6f", key="input_lat", on_change=update_form_coords)
@@ -445,7 +413,6 @@ with col_form:
             if quick_species:
                 now_quick = datetime.now()
                 
-                # 共通設定の値
                 current_collector = st.session_state.last_collector
                 try:
                     current_method = METHODS[st.session_state.last_method_index]
@@ -453,11 +420,10 @@ with col_form:
                     current_method = METHODS[0]
                 current_notes = st.session_state.last_notes
                 
-                # 確定済みの input_lat/lon を使用
-                rec_lat = st.session_state.input_lat
-                rec_lon = st.session_state.input_lon
+                # 確定済みの input_lat/lon (＝selected_lat/lon) を使用
+                rec_lat = st.session_state.selected_lat
+                rec_lon = st.session_state.selected_lon
                 
-                # ガード
                 if not rec_lat or rec_lat == 0:
                     rec_lat = 35.6895
                     rec_lon = 139.6917
@@ -525,8 +491,8 @@ with col_form:
                         current_method = METHODS[0]
                     current_notes = st.session_state.last_notes
                     
-                    rec_lat = st.session_state.input_lat
-                    rec_lon = st.session_state.input_lon
+                    rec_lat = st.session_state.selected_lat
+                    rec_lon = st.session_state.selected_lon
                     
                     new_record = {
                         "日付": input_date,
