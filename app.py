@@ -59,6 +59,46 @@ with st.sidebar.expander("➕ 新規プロジェクト作成"):
 
 DATA_FILE = f"{FILE_PREFIX}{st.session_state.current_project}.csv"
 st.sidebar.info(f"現在のデータ: `{DATA_FILE}`")
+
+# --- 💾 バックアップと復元機能 (New!) ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("💾 バックアップと復元")
+
+# 1. ダウンロード (バックアップ)
+if os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "rb") as f:
+        csv_bytes = f.read()
+    st.sidebar.download_button(
+        label="📥 現在のデータをDL (Backup)",
+        data=csv_bytes,
+        file_name=f"{st.session_state.current_project}_backup_{datetime.now().strftime('%Y%m%d')}.csv",
+        mime="text/csv",
+        help="プロジェクトごとのCSVデータを手元に保存します。"
+    )
+else:
+    st.sidebar.warning("データファイルがまだありません。")
+
+# 2. アップロード (復元)
+uploaded_file = st.sidebar.file_uploader("📤 CSVを読み込んで復元", type=["csv"], help="バックアップしたCSVを読み込み、現在のプロジェクトに上書きします。")
+if uploaded_file is not None:
+    try:
+        # 読み込んで形式チェック
+        import_df = pd.read_csv(uploaded_file)
+        # 必須カラムのチェック (簡易)
+        required_cols = ["日付", "時間", "lat", "lon", "種名"]
+        
+        # カラム名が足りているか確認
+        if all(col in import_df.columns for col in required_cols):
+            st.sidebar.info(f"読み込み成功: {len(import_df)} 件のデータ")
+            if st.sidebar.button("⚠️ 現在のプロジェクトに上書き保存する"):
+                import_df.to_csv(DATA_FILE, index=False)
+                st.sidebar.success("復元しました！リロードします。")
+                st.rerun()
+        else:
+            st.sidebar.error("エラー: CSVの形式が異なります（必要な列が見つかりません）。")
+    except Exception as e:
+        st.sidebar.error(f"読み込みエラー: {e}")
+
 st.sidebar.markdown("---")
 
 
@@ -413,6 +453,7 @@ with col_form:
             if quick_species:
                 now_quick = datetime.now()
                 
+                # 共通設定の値
                 current_collector = st.session_state.last_collector
                 try:
                     current_method = METHODS[st.session_state.last_method_index]
@@ -424,6 +465,7 @@ with col_form:
                 rec_lat = st.session_state.selected_lat
                 rec_lon = st.session_state.selected_lon
                 
+                # ガード
                 if not rec_lat or rec_lat == 0:
                     rec_lat = 35.6895
                     rec_lon = 139.6917
@@ -491,8 +533,8 @@ with col_form:
                         current_method = METHODS[0]
                     current_notes = st.session_state.last_notes
                     
-                    rec_lat = st.session_state.selected_lat
-                    rec_lon = st.session_state.selected_lon
+                    rec_lat = st.session_state.input_lat
+                    rec_lon = st.session_state.input_lon
                     
                     new_record = {
                         "日付": input_date,
