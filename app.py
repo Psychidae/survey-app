@@ -212,9 +212,15 @@ st.caption(f"Project: **{st.session_state.current_project}**")
 if 'selected_lat' not in st.session_state:
     df_init = load_data(DATA_FILE)
     if not df_init.empty:
-        last_rec = df_init.iloc[-1]
-        st.session_state.selected_lat = last_rec['lat']
-        st.session_state.selected_lon = last_rec['lon']
+        # 有効な座標がある最後のデータを検索
+        valid_df = df_init.dropna(subset=['lat', 'lon'])
+        if not valid_df.empty:
+            last_rec = valid_df.iloc[-1]
+            st.session_state.selected_lat = last_rec['lat']
+            st.session_state.selected_lon = last_rec['lon']
+        else:
+            st.session_state.selected_lat = 35.6895
+            st.session_state.selected_lon = 139.6917
     else:
         st.session_state.selected_lat = 35.6895
         st.session_state.selected_lon = 139.6917
@@ -397,18 +403,26 @@ with col_map:
         strings={"title": "現在地へ移動"}
     ).add_to(m)
 
+    # --- 修正: データ読み込み時にNaNを除外 ---
     df = load_data(DATA_FILE)
-    for index, row in df.iterrows():
-        folium.CircleMarker(
-            location=[row['lat'], row['lon']],
-            radius=6,
-            color="#FF007F",
-            fill=True,
-            fill_color="#FF007F",
-            fill_opacity=0.7,
-            popup=f"{row['種名']} ({row['日付']})",
-            tooltip=row['種名']
-        ).add_to(m)
+    # 緯度・経度が数値でない、またはNaNの行を除外する
+    df_clean = df.dropna(subset=['lat', 'lon'])
+    
+    for index, row in df_clean.iterrows():
+        #念のためさらにtry-exceptで囲む
+        try:
+            folium.CircleMarker(
+                location=[row['lat'], row['lon']],
+                radius=6,
+                color="#FF007F",
+                fill=True,
+                fill_color="#FF007F",
+                fill_opacity=0.7,
+                popup=f"{row['種名']} ({row['日付']})",
+                tooltip=row['種名']
+            ).add_to(m)
+        except Exception:
+            continue
 
     folium.Marker(
         [st.session_state.selected_lat, st.session_state.selected_lon],
