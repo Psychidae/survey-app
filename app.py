@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import os
 import folium
 from streamlit_folium import st_folium
@@ -21,6 +21,8 @@ OFFLINE_MAP_IMAGE = 'offline_map.png'
 OFFLINE_GEOJSON = 'offline_map.geojson'
 OFFLINE_ROADS = 'offline_roads.geojson'
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+CONFIG_FILE = "config.json"
+JST = timezone(timedelta(hours=9), 'JST')
 
 # 採集方法の定義
 METHODS = ["Light trap (灯火採集)", "Net sweeping (ネット)", "Finding (見取り)", "Bait trap (ベイト)"]
@@ -31,6 +33,19 @@ def get_existing_projects():
     if not projects:
         return ["default"]
     return sorted(projects)
+
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_config(config):
+    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(config, f, ensure_ascii=False, indent=4)
 
 @st.cache_data
 def load_road_geojson():
@@ -58,11 +73,32 @@ def append_data(file_path, new_record):
     new_df = pd.DataFrame([new_record])
     df = pd.concat([df, new_df], ignore_index=True)
     df.to_csv(file_path, index=False)
+    
+    # Backup
+    config = load_config()
+    backup_dir = config.get("backup_directory")
+    if backup_dir and os.path.exists(backup_dir):
+        try:
+            backup_path = os.path.join(backup_dir, os.path.basename(file_path))
+            df.to_csv(backup_path, index=False)
+        except Exception as e:
+            print(f"Backup failed: {e}")
+            
     return df
 
 def save_dataframe(file_path, df):
     """データフレーム全体を上書き保存"""
     df.to_csv(file_path, index=False)
+    
+    # Backup
+    config = load_config()
+    backup_dir = config.get("backup_directory")
+    if backup_dir and os.path.exists(backup_dir):
+        try:
+            backup_path = os.path.join(backup_dir, os.path.basename(file_path))
+            df.to_csv(backup_path, index=False)
+        except Exception as e:
+            print(f"Backup failed: {e}")
 
 def download_roads_for_bounds(south, west, north, east):
     query = f"""
@@ -197,6 +233,22 @@ if uploaded_file is not None:
     except Exception as e:
         st.sidebar.error(f"読み込みエラー: {e}")
 
+
+# --- ⚙️ システム設定 (バックアップ) ---
+st.sidebar.markdown("---")
+with st.sidebar.expander("⚙️ システム設定"):
+    config = load_config()
+    current_backup = config.get("backup_directory", "")
+    new_backup = st.text_input("バックアップ保存先フォルダ (絶対パス)", value=current_backup)
+    
+    if st.button("設定を保存"):
+        if new_backup and not os.path.exists(new_backup):
+            st.error("指定されたフォルダが存在しません。")
+        else:
+            config["backup_directory"] = new_backup
+            save_config(config)
+            st.success("設定を保存しました。")
+
 st.sidebar.markdown("---")
 
 
@@ -245,9 +297,9 @@ if 'last_notes' not in st.session_state:
     st.session_state.last_notes = ""
 
 if 'last_date' not in st.session_state:
-    st.session_state.last_date = datetime.now()
+    st.session_state.last_date = datetime.now(JST)
 if 'last_time' not in st.session_state:
-    st.session_state.last_time = datetime.now()
+    st.session_state.last_time = datetime.now(JST)
 
 if 'map_bounds' not in st.session_state:
     st.session_state.map_bounds = None
@@ -430,7 +482,7 @@ with col_map:
         icon=folium.Icon(color='red', icon='info-sign')
     ).add_to(m)
 
-    ret_objs = ["last_clicked"]
+    ret_objs = ["last_clicked", "last_object_clicked"]
     if enable_bounds_tracking:
         ret_objs.append("bounds")
 
@@ -445,7 +497,26 @@ with col_map:
         if enable_bounds_tracking and map_data.get("bounds"):
             st.session_state.map_bounds = map_data["bounds"]
         
-        if map_data.get("last_clicked"):
+        # 優先順位: マーカークリック > マップクリック
+        
+        # 1. マーカー(既存ピン)をクリックした場合 -> その座標に吸着
+        if map_data.get("last_object_clicked"):
+            obj_lat = map_data["last_object_clicked"]["lat"]
+            obj_lon = map_data["last_object_clicked"]["lng"]
+            
+            if obj_lat != 0 and obj_lon != 0:
+                 if (abs(obj_lat - st.session_state.selected_lat) > 0.0000001 or 
+                     abs(obj_lon - st.session_state.selected_lon) > 0.0000001):
+                    
+                    st.session_state.selected_lat = obj_lat
+                    st.session_state.selected_lon = obj_lon
+                    st.session_state.input_lat = obj_lat
+                    st.session_state.input_lon = obj_lon
+                    st.toast("📍 既存のピンを選択しました！")
+                    st.rerun()
+
+        # 2. 地図の空白部分をクリックした場合
+        elif map_data.get("last_clicked"):
             clicked_lat = map_data["last_clicked"]["lat"]
             clicked_lon = map_data["last_clicked"]["lng"]
             
@@ -476,7 +547,7 @@ with col_form:
         
         if quick_submit:
             if quick_species:
-                now_quick = datetime.now()
+                now_quick = datetime.now(JST)
                 
                 current_collector = st.session_state.last_collector
                 try:
